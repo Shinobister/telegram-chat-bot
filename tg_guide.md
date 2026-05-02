@@ -6,8 +6,9 @@
 ## Active Project
 `bishbot`
 
-All Telegram messages to this bot must be prefixed with `bishbot` followed by a space.
-Example: `bishbot Hello, what are you working on?`
+All Telegram messages to this bot SHOULD be prefixed with `bishbot` followed by a space.
+Messages without the prefix will still be processed — the bot uses conversation context
+to interpret them. All outgoing messages include the `bishbot` prefix.
 
 ## Bishbot Status
 `bishbot: inactive`
@@ -19,11 +20,6 @@ Leave as `inactive` during normal back-and-forth conversation.
 
 ## Pending Outgoing Message
 *Leave blank when not in use.*
-
-When `bishbot: active`, write the message you want to send here. The bot will send it
-and clear this section. Example:
-
-> Hey Don, I need your input on the database schema. Which engine do you prefer?
 
 ## Close Signal
 `close: false`
@@ -41,23 +37,20 @@ Sending this as a Telegram message immediately terminates the bot.
 1. **Receiving messages**: When the user sends a message via Telegram, the bot forwards it
    to the LLM and sends the response back. Conversation history is stored below.
 
-2. **Sending proactive messages**: If you need to ask the user something outside of a
+2. **Prefix enforcement**: All incoming messages SHOULD start with `bishbot ` but the bot
+   will also process messages without the prefix by using LLM context to interpret them.
+   All outgoing messages ALWAYS include the `bishbot ` prefix for identification.
+
+3. **Unexpected messages**: If a message arrives without the expected prefix, the bot
+   reads the conversation history from this file and uses the LLM API to interpret the
+   user's intent and respond appropriately. These interactions are also recorded in history.
+
+4. **Sending proactive messages**: If you need to ask the user something outside of a
    response cycle:
    a. Set `bishbot: active` above
    b. Write your message in ## Pending Outgoing Message
-   c. Save this file
-   d. The bot picks it up within 5 seconds, sends it, and resets the flag
-
-3. **Ending the session**: When the user indicates they're done:
-   a. Set `close: true` above
-   b. Save this file
-   c. The bot detects the close signal and shuts down
-
-4. **History awareness**: Read the ## Conversation History section below to understand
-   what's been discussed. The LLM receives the compressed summary + last 20 messages
-   as context for each response.
-
----
+   c. The bot detects the flag, sends your message (with `bishbot ` prefix), and resets to `inactive`
+*Leave blank when not in use.*
 
 ## Conversation History
 

@@ -186,8 +186,11 @@ class LLMClient:
         return (
             f"You are bishbot, a helpful Telegram assistant for project \"{self.project}\".\n\n"
             "Rules:\n"
-            f"- User messages are prefixed with \"{self.project} \" — ignore this prefix.\n"
+            f"- Messages may arrive with or without the \"{self.project} \" prefix.\n"
+            f"- If a message HAS the \"{self.project} \" prefix, strip it and respond normally.\n"
+            f"- If a message LACKS the prefix, use conversation context to interpret it.\n"
             "- Keep responses concise and conversational.\n"
+            f"- All outgoing messages MUST start with \"{self.project} \" for identification.\n"
             "- If the user says they are done or says goodbye, respond warmly.\n"
             f"- Send \"{self.project} /kill\" as a message to stop the bot.\n"
         )
@@ -511,29 +514,45 @@ class BotHandlers:
 
         raw = update.message.text.strip()
         prefix = f"{self.project} "
+        has_prefix = raw.lower().startswith(prefix.lower())
 
-        # Silently ignore messages without the project prefix
-        if not raw.lower().startswith(prefix.lower()):
-            return
-
-        body = raw[len(prefix):].strip()
-        if not body:
-            return
-
-        # ── Kill keyword ──────────────────────────────────────────────
-        if body.lower() == "/kill":
-            await update.message.reply_text("Shutting down. Goodbye!")
-            log.info("Kill keyword received, shutting down")
-            self.guide.set_close_signal(True)
-            asyncio.get_event_loop().call_later(1, self._shutdown)
-            return
+        # Extract message body
+        if has_prefix:
+            body = raw[len(prefix):].strip()
+            if not body:
+                return
+            # ── Kill keyword ──────────────────────────────────────────
+            if body.lower() == "/kill":
+                await update.message.reply_text(f"{self.project} Shutting down. Goodbye!")
+                log.info("Kill keyword received, shutting down")
+                self.guide.set_close_signal(True)
+                asyncio.get_event_loop().call_later(1, self._shutdown)
+                return
+        else:
+            body = raw
 
         # ── Typing indicator ──────────────────────────────────────────
         await update.message.chat.send_action(action="typing")
 
-        # ── Store & respond ───────────────────────────────────────────
+        # ── Store user message ────────────────────────────────────────
         await self.guide.add_message("user", body)
+
+        # ── Build context for LLM ─────────────────────────────────────
         ctx = self.guide.get_context()
+
+        # For non-prefixed messages, instruct LLM to interpret
+        if not has_prefix:
+            ctx.append({
+                "role": "system",
+                "content": (
+                    f"The user's message did NOT start with the required "
+                    f"'{self.project} ' prefix. Based on the conversation "
+                    f"history above, interpret what they mean and respond "
+                    f"appropriately. Continue the conversation naturally."
+                )
+            })
+
+        # ── Generate response ─────────────────────────────────────────
         response = await self.llm.generate_response(ctx)
         await self.guide.add_message("assistant", response)
 
@@ -542,7 +561,7 @@ class BotHandlers:
         if count > 50:
             await self.guide.compress_if_needed(self.llm)
 
-        # ── Send reply ────────────────────────────────────────────────
+        # ── Send reply (always prefixed) ──────────────────────────────
         await self._send_long(update, response)
 
     # ── Periodic guide file watcher ──────────────────────────────────────
@@ -573,6 +592,10 @@ class BotHandlers:
             if self.guide.read_bishbot_status() == "active":
                 pending = self.guide.read_pending_outgoing()
                 if pending:
+                    # Always prefix outgoing proactive messages
+                    prefix_str = f"{self.project} "
+                    if not pending.startswith(prefix_str):
+                        pending = f"{prefix_str}{pending}"
                     log.info("Sending proactive message: %.60s...", pending)
                     await context.bot.send_message(
                         chat_id=self.config.chat_id,
@@ -587,8 +610,13 @@ class BotHandlers:
     # ── Helpers ──────────────────────────────────────────────────────────
 
     async def _send_long(self, update: Update, text: str):
-        """Send reply, splitting into chunks if >4096 characters."""
+        """Send reply with project prefix, splitting into chunks if >4096 characters."""
         MAX_TG = 4096
+        # Always prefix outgoing messages for clear identification
+        prefix_str = f"{self.project} "
+        if not text.startswith(prefix_str):
+            text = f"{prefix_str}{text}"
+
         if len(text) <= MAX_TG:
             await update.message.reply_text(text)
             return
@@ -665,6 +693,12 @@ def main():
     log.info("─" * 50)
 
     try:
+        # Ensure an event loop exists for this thread (needed on Python 3.14+)
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
         app.run_polling(allowed_updates=Update.ALL_TYPES)
     except KeyboardInterrupt:
         log.info("KeyboardInterrupt received")
@@ -686,7 +720,9 @@ _DEFAULT_GUIDE_TEMPLATE = """# bishbot Guide
 ## Active Project
 `bishbot`
 
-Prefix all Telegram messages with `bishbot ` followed by your message.
+All Telegram messages to this bot SHOULD be prefixed with `bishbot` followed by a space.
+Messages without the prefix will still be processed — the bot uses conversation context
+to interpret them. All outgoing messages include the `bishbot` prefix.
 
 ## Bishbot Status
 `bishbot: inactive`
