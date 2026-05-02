@@ -13,6 +13,9 @@ tg_config.json
 .vscode/
 .idea/
 
+# Logs
+bot.log
+
 # OS
 .DS_Store
 Thumbs.db
